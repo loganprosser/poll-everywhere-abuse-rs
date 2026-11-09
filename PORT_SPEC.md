@@ -1,6 +1,6 @@
 # Rust port spec
 
-Port of the Python app at `/Users/logan/Documents/dev/cornell/fall2026/pollevapp`
+Port of the Python app
 (public repo `loganprosser/poll-everywhere-abuse`). The Python source is the
 behavior reference: read the named functions before porting them, and keep
 the intent of every "confirmed live" comment (those encode real PollEv quirks).

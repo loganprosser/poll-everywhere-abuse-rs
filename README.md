@@ -57,8 +57,10 @@ is only needed for reply-by-text confirmations.
 
 - **No fixed startup waits.** The Python app slept for the cookie banner, the
   login wall and the screen-name prompt on every start. Here the page setup
-  runs every loop and reacts to whatever is on screen, so startup is just the
-  page load.
+  runs every loop and reacts to whatever is on screen, so a question that is
+  already live gets answered right after the page loads. (On an idle page the
+  status still waits 5s before saying "Watching", so a login wall that renders
+  late is not mistaken for a mid-session logout. Detection runs the whole time.)
 - **150ms detection** (was 400ms).
 - **Persistent Chrome profile** instead of a saved storage-state file. Logins
   and cookies survive restarts, and Chrome is closed gracefully so they flush.
@@ -71,6 +73,25 @@ is only needed for reply-by-text confirmations.
   Stop so it responds quickly even mid-call.
 - It drives your installed Chrome-family browser directly over the DevTools
   protocol: no Python, no Playwright download.
+
+### Measured
+
+Both engines against the same local fake poll page on one Mac, with an instant
+stub AI (the AI's own thinking time is the same for both and not included).
+Medians, independently re-run and checked.
+
+| | Python | Rust |
+|---|---|---|
+| Start to first answer (question already live) | 10.5 s | **0.47 s** (~22x) |
+| Start to "Watching" (idle page) | 10.0 s | 5.5 s |
+| Question appears to vote clicked | 0.33 s | **0.10 s** (~3x) |
+| Stop right after a vote | 0.36 s | 0.23 s |
+| App size | 179 MB | **8.6 MB** |
+| Idle CPU, quiet page | 2.4% of a core | 5.8% of a core (worse) |
+
+Most of the startup gain is the removed fixed waits, and most of the live gain
+is the shorter check interval, not raw language speed. The cost is idle CPU:
+checking the page more often keeps Chrome busier.
 
 ## Not ported
 
