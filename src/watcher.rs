@@ -8,6 +8,7 @@ use crate::poll::{self, PageSetup, Question, SubmitError};
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::hash::{BuildHasher, RandomState};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,6 +49,8 @@ pub struct RunOptions {
     pub stop: Arc<AtomicBool>,
     /// How often the loop looks at the page (default 150ms).
     pub poll_interval: Duration,
+    /// (min, max) hold after detection before submitting; see hold_answer.
+    pub answer_delay: (Duration, Duration),
 }
 
 /// Pages navigate mid-tick, so a failed tick is normal; this many in a row
@@ -376,6 +379,49 @@ struct AiOut {
     image: Option<(PathBuf, Vec<(f64, f64)>)>,
 }
 
+/// Uniform in [lo, hi]. std's randomly keyed hasher is plenty for jitter.
+fn random_between((lo, hi): (Duration, Duration)) -> Duration {
+    let bits = RandomState::new().hash_one(()) >> 11; // 53 bits -> [0, 1)
+    lo + hi.saturating_sub(lo).mul_f64(bits as f64 / (1u64 << 53) as f64)
+}
+
+/// Whether a held answer should go in now: someone else has answered
+/// (results_count rose since detection), or the question closed or changed
+/// (submit then reports it, and the loop moves on to the next one).
+fn turn_over(q: &Question, live: Option<&Question>) -> bool {
+    match live {
+        Some(l) if l.question_id == q.question_id => {
+            matches!((q.results_count, l.results_count), (Some(then), Some(now)) if now > then)
+        }
+        _ => true,
+    }
+}
+
+/// Keeps us from being the first vote in the instant a poll opens: waits
+/// until `deadline`, or less if turn_over says go. Watches the page while it
+/// waits, so a next question is not missed.
+fn hold_answer(browser: &Browser, q: &Question, deadline: Instant, opts: &RunOptions) {
+    let start = Instant::now();
+    let mut why = "timer";
+    while Instant::now() < deadline {
+        if opts.stop.load(Ordering::SeqCst) {
+            return;
+        }
+        // A failed look (page mid-navigation) just means keep waiting.
+        if let Ok(live) = poll::get_current_question(browser.page())
+            && turn_over(q, live.as_ref())
+        {
+            why = "someone else answered, or the question changed";
+            break;
+        }
+        std::thread::sleep(opts.poll_interval);
+    }
+    log(
+        &opts.logs_dir,
+        &format!("[ai_answer] held the answer {:.1}s ({why})", start.elapsed().as_secs_f64()),
+    );
+}
+
 /// The model step. Err is the final status text (FAILED ...).
 fn ask_ai(
     q: &Question,
@@ -437,6 +483,8 @@ fn ask_ai(
 /// returned {"question","answer","confidence","reasoning","status"} object
 /// (ai_answer.answer_with_ai).
 pub fn answer_question(browser: &Browser, q: &Question, opts: &RunOptions) -> Value {
+    // Counted from detection, so time spent on the AI call is part of it.
+    let deadline = Instant::now() + random_between(opts.answer_delay);
     let url = browser.page().url().unwrap_or_else(|_| q.url.clone());
     let notify = |title: &str, body: &str| (opts.notify)(title, body, &url);
     let qtype = q.qtype.as_str();
@@ -560,8 +608,8 @@ pub fn answer_question(browser: &Browser, q: &Question, opts: &RunOptions) -> Va
                 }
             }
         } else {
-            // Short by design, and no delay before submitting, so quick-succession
-            // polls aren't blocked waiting on an artificial pause.
+            // Short by design. The pause before submitting is hold_answer below,
+            // which keeps watching the page so quick-succession polls aren't missed.
             let answer_summary = if is_click {
                 let pts = image.as_ref().map(|(_, c)| c.as_slice()).unwrap_or(&[]);
                 pts.iter()
@@ -596,6 +644,9 @@ pub fn answer_question(browser: &Browser, q: &Question, opts: &RunOptions) -> Va
             }
         }
 
+        if status.is_none() {
+            hold_answer(browser, q, deadline, opts);
+        }
         // Auto mode notifies synchronously above; Stop pressed meanwhile wins.
         if status.is_none() && opts.stop.load(Ordering::SeqCst) {
             status = Some("SKIPPED (stopped)".into());
@@ -1048,6 +1099,11 @@ impl WatcherService {
             on_event,
             stop,
             poll_interval: Duration::from_millis(150),
+            // A hand-edited bad value (negative, NaN) means no hold, not a panic.
+            answer_delay: (
+                Duration::try_from_secs_f64(cfg.answer_delay_secs.0).unwrap_or_default(),
+                Duration::try_from_secs_f64(cfg.answer_delay_secs.1).unwrap_or_default(),
+            ),
         };
         let handle = std::thread::Builder::new()
             .name("pollev-watcher".into())
@@ -1193,7 +1249,24 @@ mod tests {
             image_url: None,
             answer: Value::Null,
             source: "dom".into(),
+            results_count: None,
         }
+    }
+
+    #[test]
+    fn hold_ends_on_new_response_or_question_change() {
+        let at = |id, n| Question { results_count: n, ..question(id) };
+        assert!(!turn_over(&at(1, Some(3)), Some(&at(1, Some(3)))), "no one new yet");
+        assert!(turn_over(&at(1, Some(3)), Some(&at(1, Some(4)))), "someone else answered");
+        assert!(!turn_over(&at(1, None), Some(&at(1, Some(4)))), "no baseline, no early go");
+        assert!(turn_over(&at(1, Some(3)), Some(&at(2, Some(0)))), "question changed");
+        assert!(turn_over(&at(1, Some(3)), None), "question closed");
+
+        let (lo, hi) = (Duration::from_secs_f64(13.8), Duration::from_secs_f64(20.4));
+        let picks: Vec<Duration> = (0..200).map(|_| random_between((lo, hi))).collect();
+        assert!(picks.iter().all(|d| (lo..=hi).contains(d)));
+        assert!(picks.iter().any(|d| *d != picks[0]), "not random");
+        assert_eq!(random_between((hi, lo)), hi, "inverted range is just its min");
     }
 
     #[test]
@@ -1422,6 +1495,7 @@ mod tests {
             on_event: Arc::new(move |e| ev.lock().unwrap().push(e)),
             stop: stop.clone(),
             poll_interval: Duration::from_millis(100),
+            answer_delay: (Duration::ZERO, Duration::ZERO),
         };
         let h = std::thread::spawn(move || run(opts));
         let has_result = |events: &Mutex<Vec<Value>>| {
@@ -1491,6 +1565,7 @@ mod tests {
             ai_require_confirmation: true,
             ai_test_on_startup: false,
             notify_imessage: false,
+            answer_delay_secs: (0.0, 0.0),
             ..AppConfig::default()
         };
         let (notify, _notes) = notes();
@@ -1593,6 +1668,7 @@ mod tests {
             ai_enabled: true,
             ai_test_on_startup: true,
             notify_imessage: false,
+            answer_delay_secs: (0.0, 0.0),
             ..AppConfig::default()
         };
         let bad: AiFn = Arc::new(|_: &str, _: &AtomicBool| Err(anyhow!("backend is down")));
@@ -1654,6 +1730,7 @@ mod tests {
             on_event: Arc::new(move |e| ev.lock().unwrap().push(e)),
             stop: stop.clone(),
             poll_interval: Duration::from_millis(100),
+            answer_delay: (Duration::ZERO, Duration::ZERO),
         };
         let h = std::thread::spawn(move || run(opts));
         wait_until("the AI call to start", 60, || {

@@ -278,6 +278,7 @@ impl Run {
             ai_test_on_startup: false,
             notify_imessage: false,
             notify_ntfy: false,
+            answer_delay_secs: (0.0, 0.0),
             ..AppConfig::default()
         };
         cfg(&mut c);
@@ -458,6 +459,41 @@ fn t1_multiple_choice_exact_option_and_timings() {
     assert!(run.svc.stop(Duration::from_secs(10)));
     println!("MEASURE stop() with idle watcher: {}", ms(t_stop.elapsed()));
     assert_eq!(run.svc.state(), "stopped");
+}
+
+#[test]
+fn answer_held_until_timer_or_someone_else_answers() {
+    if !chrome_or_skip() {
+        return;
+    }
+    let page = |id: i64, n: i64| {
+        mc_page(id, json!(1), &["12", "2"])
+            .replace("\"shared_key\"", &format!("\"results_count\":{n},\"shared_key\""))
+    };
+    // Nobody else answers: the vote waits out the whole (fixed) 2s hold.
+    let srv = Srv::start(IDLE);
+    let run = Run::start("hold", &srv.url(), |c| c.answer_delay_secs = (2.0, 2.0), mc_ai("2"));
+    run.wait_state("watching", 30);
+    let t_switch = srv.set(&page(1, 0));
+    srv.wait_hits("/vote", 1, 20);
+    let held = srv.hits_t("/vote")[0].0.duration_since(t_switch);
+    println!("MEASURE timer hold: {}", ms(held));
+    assert!(held >= Duration::from_secs(2) && held < Duration::from_secs(4), "{held:?}");
+
+    // Someone else answers 1s in: the vote goes right after, not at 30s.
+    let srv = Srv::start(IDLE);
+    let run2 = Run::start("hold2", &srv.url(), |c| c.answer_delay_secs = (30.0, 30.0), mc_ai("2"));
+    run2.wait_state("watching", 30);
+    let t_switch = srv.set(&page(2, 0));
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(srv.hits("/vote").is_empty(), "voted before anyone else");
+    srv.set(&page(2, 1));
+    srv.wait_hits("/vote", 1, 10);
+    let held = srv.hits_t("/vote")[0].0.duration_since(t_switch);
+    println!("MEASURE early hold: {}", ms(held));
+    assert!(held < Duration::from_secs(3), "{held:?}");
+    assert_eq!(run2.wait_result(1, 10)[0]["status"], json!("SUBMITTED"));
+    drop(run);
 }
 
 #[test]
@@ -868,6 +904,7 @@ fn t14_stop_during_auto_notification_skips_submit() {
         ai_test_on_startup: false,
         notify_imessage: false,
         notify_ntfy: false,
+        answer_delay_secs: (0.0, 0.0),
         ..AppConfig::default()
     };
     let in_notify = Arc::new(AtomicBool::new(false));

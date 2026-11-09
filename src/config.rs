@@ -56,6 +56,21 @@ pub struct AppConfig {
     pub ai_model: String,
     pub ai_effort: String,
     pub ai_test_on_startup: bool,
+    /// (min, max) seconds after a poll opens before our answer goes in, picked
+    /// at random per question; it goes in sooner once someone else has answered.
+    pub answer_delay_secs: (f64, f64),
+    /// Polls shown as one-click choices under the Poll link field, each with
+    /// the fake location it was last started with.
+    pub saved_polls: Vec<SavedPoll>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedPoll {
+    pub url: String,
+    /// 0, 0 = no location saved with it.
+    pub geo_lat: f64,
+    pub geo_lon: f64,
 }
 
 impl Default for AppConfig {
@@ -84,6 +99,8 @@ impl Default for AppConfig {
             ai_model: if nrp { "qwen3" } else { "sonnet" }.into(),
             ai_effort: String::new(),
             ai_test_on_startup: false,
+            answer_delay_secs: (13.8, 20.4), // 0.23-0.34 min
+            saved_polls: Vec::new(),
         }
     }
 }

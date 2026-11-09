@@ -43,7 +43,11 @@ Other commands: `make run` launches from source without building the .app,
 ## Using it
 
 1. **Tell it your poll**: paste your class's `pollev.com/...` link in the
-   "Poll link" box and type the screen name you want to appear as.
+   "Poll link" box and type the screen name you want to appear as. Every
+   link you press Start with is saved as a button under the box, together
+   with the fake location it ran with. Click one to switch to that poll and
+   its location, or its × to remove it. Starting a saved poll again saves its
+   current location.
 2. **Notifications** (Settings): turn on whichever you want. macOS and Sound
    work instantly. ntfy needs a topic (any unique word: install the ntfy app on
    your phone and subscribe to the same word; anyone who knows the word can
@@ -220,7 +224,7 @@ live):
 3. It asks the model, framing the question as untrusted data. The CLI itself
    enforces the reply shape: `{"answer": ..., "confidence": 0-100, "reasoning": "..."}`.
 4. It notifies you with the question, the answer and the confidence, then:
-   - **Multiple choice, select multiple, clickable image**: submits right away,
+   - **Multiple choice, select multiple, clickable image**: submits on its own,
      or, if confirmation is on, waits for you to click **Accept** in the app or
      reply to the text.
    - **Short answer**: always waits for you. Reply "lgtm" (or click Accept) to
@@ -228,6 +232,11 @@ live):
      submit that instead. The AI is told to keep these to 1 to 4 words with no
      hyphens or dashes.
 5. It submits and notifies you of the outcome, then goes back to watching.
+   It never votes the instant a poll opens: it waits a random 13.8 to 20.4
+   seconds (0.23 to 0.34 min) from when the poll appeared, or less if the
+   response count goes up first. The page only refreshes that count now and
+   then, so usually the timer decides. Change the range with
+   `answer_delay_secs` in `app_settings.json`; `[0, 0]` turns it off.
 
 **Confirmations: in the app or by text, first one wins.** Clicking Accept after
 you already replied by text does nothing, and the other way around, so an

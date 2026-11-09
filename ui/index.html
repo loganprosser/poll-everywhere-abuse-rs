@@ -132,6 +132,17 @@
   .btn-quiet:hover:not(:disabled) { background: var(--fill); }
   .btn-small { font-size: 12px; padding: 4px 10px; }
 
+  /* saved poll links */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chips:empty { display: none; }
+  .chip { display: inline-flex; border: 1px solid var(--border-strong);
+    border-radius: 999px; overflow: hidden; max-width: 100%; }
+  .chip button { background: none; border: 0; border-radius: 0; font-size: 12px;
+    color: var(--text); padding: 3px 4px 3px 10px; overflow: hidden; text-overflow: ellipsis; }
+  .chip button + button { color: var(--text3); padding: 3px 9px 3px 4px; }
+  .chip.on { background: var(--accent); border-color: var(--accent); }
+  .chip.on button { color: var(--on-accent); }
+
   /* switches (iOS style) */
   .switch { display: flex; align-items: center; gap: 9px; cursor: pointer;
     user-select: none; padding: 3px 0; }
@@ -277,6 +288,7 @@
           <div class="field">
             <label for="pollUrl">Poll link</label>
             <input type="text" id="pollUrl" placeholder="https://pollev.com/...">
+            <div class="chips" id="savedLinks"></div>
           </div>
           <div class="field">
             <label for="username">Screen name</label>
@@ -511,6 +523,11 @@
       else el.value = cfg[key] ?? '';
     }
     syncBackendSeg();
+    // First run with this feature: the link already in use starts the list.
+    if (!cfg.saved_polls?.length && cfg.poll_url?.includes('pollev.com')) {
+      cfg.saved_polls = [{ url: cfg.poll_url.trim(), geo_lat: cfg.geo_lat || 0, geo_lon: cfg.geo_lon || 0 }];
+    }
+    renderSaved();
     if (cfg.geo_lat && cfg.geo_lon) {
       setFakePin(cfg.geo_lat, cfg.geo_lon, 'saved');
     }
@@ -567,6 +584,39 @@
     else logLine('not a pollev.com link: ' + text, 'err');
   });
   $('pollUrl').addEventListener('paste', () => setTimeout(saveConfig, 0));
+
+  // ---------- saved polls ----------
+  // Each link you Start with is remembered with the fake location it used:
+  // click one to switch to both, x to forget it.
+  function renderSaved() {
+    const box = $('savedLinks');
+    box.textContent = '';
+    for (const p of config?.saved_polls || []) {
+      const { url } = p;
+      const name = url.replace(/^https?:\/\/(www\.)?pollev\.com\//, '') || url;
+      const hasGeo = !!(p.geo_lat || p.geo_lon);
+      const chip = document.createElement('span');
+      chip.className = 'chip' + (url === $('pollUrl').value.trim() ? ' on' : '');
+      const use = document.createElement('button');
+      use.textContent = name;
+      use.title = url + (hasGeo ? `\nlocation ${p.geo_lat.toFixed(5)}, ${p.geo_lon.toFixed(5)}` : '');
+      use.addEventListener('click', () => {
+        $('pollUrl').value = url;
+        if (hasGeo) setFakePin(p.geo_lat, p.geo_lon, name);
+        saveConfig(); renderSaved();
+      });
+      const del = document.createElement('button');
+      del.textContent = '×';
+      del.setAttribute('aria-label', 'Forget ' + url);
+      del.addEventListener('click', () => {
+        config.saved_polls = config.saved_polls.filter((q) => q.url !== url);
+        saveConfig(); renderSaved();
+      });
+      chip.append(use, del);
+      box.append(chip);
+    }
+  }
+  $('pollUrl').addEventListener('input', renderSaved);
 
   // ---------- models ----------
   // Per-backend default when the saved model belongs to a different backend
@@ -648,6 +698,15 @@
   // ---------- start/stop ----------
   $('startStopBtn').addEventListener('click', () => {
     if ($('startStopBtn').textContent === 'Start') {
+      // Remember this poll with the location it runs with (updates it in place).
+      const url = $('pollUrl').value.trim();
+      if (url.includes('pollev.com')) {
+        const polls = config.saved_polls || [];
+        const entry = { url, geo_lat: config.geo_lat || 0, geo_lon: config.geo_lon || 0 };
+        const i = polls.findIndex((p) => p.url === url);
+        config.saved_polls = i < 0 ? [...polls, entry] : polls.map((p, j) => (j === i ? entry : p));
+        renderSaved();
+      }
       saveConfig();
       pywebview.api.start_watch().then((r) => {
         if (!r.ok) (r.problems || []).forEach((p) => logLine('can\'t start: ' + p, 'err'));

@@ -818,6 +818,7 @@ mod tests {
                     "geo_lon": 7,
                     "geo_accuracy": "junk",
                     "ai_enabled": 0,
+                    "saved_polls": [{"url": "https://pollev.com/abc", "geo_lat": 42.4, "geo_lon": -76.5}, {"url": "https://pollev.com/xyz"}],
                     "not_a_key": 1,
                 })],
             )
@@ -825,6 +826,11 @@ mod tests {
         assert_eq!(r["ok"], true);
         let c = &r["config"];
         assert_eq!(c["poll_url"], "https://pollev.com/abc");
+        assert_eq!(
+            c["saved_polls"],
+            json!([{"url": "https://pollev.com/abc", "geo_lat": 42.4, "geo_lon": -76.5},
+                   {"url": "https://pollev.com/xyz", "geo_lat": 0.0, "geo_lon": 0.0}])
+        );
         assert_eq!(c["username"], "");
         assert_eq!(c["headless"], true);
         assert_eq!(c["notify_sound"], false);

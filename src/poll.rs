@@ -33,6 +33,9 @@ pub struct Question {
     pub image_url: Option<String>,
     pub answer: Value,
     pub source: String,
+    /// PollEv's response tally as of this read. The participant page only
+    /// refreshes it now and then, not per vote (seen in captured traffic).
+    pub results_count: Option<i64>,
 }
 
 /// Classification of PollEv's embedded activity JSON
@@ -192,6 +195,7 @@ fn build_question_record(url: &str, text: &str, ex: &Extracted) -> Question {
         image_url: ex.image_url.clone(),
         answer: Value::Null,
         source: "dom".to_string(),
+        results_count: ex.raw.get("results_count").and_then(Value::as_i64),
     }
 }
 

@@ -793,6 +793,7 @@ mod tests {
             image_url: None,
             answer: Value::Null,
             source: String::new(),
+            results_count: None,
         }
     }
 
