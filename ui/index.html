@@ -1,0 +1,779 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poll Everywhere Abuse</title>
+<link rel="stylesheet" href="{static}/leaflet.css" />
+<style>
+  /* ---------- theme: auto-follows macOS appearance ---------- */
+  :root {
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --radius: 10px;
+    --accent: #34C759; --on-accent: #fff;
+    --danger: #FF3B30;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #F5F5F7; --surface: #FFFFFF; --surface2: #EEEFF2; --fill: #E9EAEE;
+      --border: #D8DAE0; --border-strong: #C2C5CC;
+      --text: #1D1D1F; --text2: #6E6E73; --text3: #98989D;
+      --accent-soft: rgba(52, 199, 89, 0.14);
+      --shadow: 0 1px 2px rgba(0,0,0,0.05), 0 8px 24px rgba(0,0,0,0.06);
+      --log-bg: #F7F7F9;
+    }
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1B1D22; --surface: #23262D; --surface2: #2A2E36; --fill: #31353F;
+      --border: #343945; --border-strong: #454B58;
+      --text: #F0F1F4; --text2: #9CA1AC; --text3: #6E7480;
+      --accent: #30D158; --on-accent: #0B1A0E;
+      --accent-soft: rgba(48, 209, 88, 0.15);
+      --danger: #FF453A;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 10px 30px rgba(0,0,0,0.25);
+      --log-bg: #1A1C21;
+    }
+  }
+
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font); background: var(--bg); color: var(--text);
+         font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+
+  /* ---------- splash ---------- */
+  #splash { position: fixed; inset: 0; z-index: 3000; display: flex;
+    align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+    background: var(--bg); }
+  .spinner { width: 26px; height: 26px; border-radius: 50%;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #splash .t { font-size: 15px; font-weight: 600; }
+  #splash .s { color: var(--text2); font-size: 12px; }
+
+  /* ---------- app frame ---------- */
+  #realui { display: none; height: 100%; }
+  .app { display: flex; height: 100%; }
+
+  /* sidebar */
+  .sidebar { width: 200px; flex: none; background: var(--surface2);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    padding: 14px 10px; box-sizing: border-box; }
+  .sidebar .appname { font-size: 14px; font-weight: 700; padding: 2px 10px 14px; }
+  .navitem { display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 7px 10px; border: none; border-radius: 8px; background: transparent;
+    color: var(--text); font: inherit; font-weight: 500; cursor: pointer;
+    text-align: left; box-sizing: border-box; margin-bottom: 2px; }
+  .navitem svg { flex: none; opacity: 0.75; }
+  .navitem:hover { background: var(--fill); }
+  .navitem.active { background: var(--accent-soft); color: var(--text); }
+  .navitem.active svg { opacity: 1; }
+
+  /* content column */
+  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+    border-bottom: 1px solid var(--border); background: var(--bg); }
+  .topbar .pagetitle { font-size: 15px; font-weight: 700; }
+  .topbar .spacer { flex: 1; }
+
+  /* status pill */
+  .statuspill { display: flex; align-items: center; gap: 7px; padding: 4px 11px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--text2); }
+  .statuspill .dot { width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text3); flex: none; }
+  .statuspill.running { color: var(--text); border-color: var(--accent); }
+  .statuspill.running .dot { background: var(--accent);
+    animation: pulse 1.6s ease-in-out infinite; }
+  .statuspill.crashed { color: var(--danger); border-color: var(--danger); }
+  .statuspill.crashed .dot { background: var(--danger); }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 var(--accent-soft); }
+                     50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
+  @media (prefers-reduced-motion: reduce) { .statuspill.running .dot { animation: none; } }
+
+  /* pages */
+  .pages { flex: 1; min-height: 0; position: relative; }
+  .page { position: absolute; inset: 0; overflow-y: auto; padding: 18px 20px 24px;
+    display: none; box-sizing: border-box; }
+  .page.active { display: block; }
+  .page.flexcol.active { display: flex; flex-direction: column; }
+
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 14px; box-shadow: var(--shadow); }
+  .card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 700; }
+  .card .footnote { margin-top: 10px; color: var(--text3); font-size: 11px; line-height: 1.5; }
+
+  /* form fields */
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 11px; font-weight: 600;
+    color: var(--text2); margin-bottom: 4px; }
+  input[type=text], select {
+    font-family: var(--font); font-size: 13px; width: 100%; box-sizing: border-box;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 8px; padding: 7px 10px; }
+  input::placeholder { color: var(--text3); }
+  input:focus-visible, select:focus-visible, button:focus-visible, .switch input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { min-width: 0; }
+  .row input, .row select { flex: 1; }
+
+  /* buttons */
+  button { font-family: var(--font); font-size: 13px; font-weight: 590;
+    border-radius: 8px; padding: 7px 14px; border: 1px solid transparent;
+    cursor: pointer; transition: filter 120ms ease, background-color 120ms ease; }
+  button:active { filter: brightness(0.92); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  .btn-primary { background: var(--accent); color: var(--on-accent); }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+  .btn-stop { background: var(--danger); color: #fff; }
+  .btn-quiet { background: var(--surface); color: var(--text);
+    border-color: var(--border-strong); }
+  .btn-quiet:hover:not(:disabled) { background: var(--fill); }
+  .btn-small { font-size: 12px; padding: 4px 10px; }
+
+  /* switches (iOS style) */
+  .switch { display: flex; align-items: center; gap: 9px; cursor: pointer;
+    user-select: none; padding: 3px 0; }
+  .switch input[type=checkbox] { appearance: none; -webkit-appearance: none;
+    margin: 0; width: 38px; height: 23px; border-radius: 23px; flex: none;
+    background: var(--border-strong); position: relative; cursor: pointer;
+    transition: background-color 150ms ease; }
+  .switch input[type=checkbox]::after { content: ''; position: absolute;
+    top: 2px; left: 2px; width: 19px; height: 19px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    transition: transform 150ms ease; }
+  .switch input[type=checkbox]:checked { background: var(--accent); }
+  .switch input[type=checkbox]:checked::after { transform: translateX(15px); }
+  .switch span { color: var(--text); }
+  .switch .sub { display: block; color: var(--text3); font-size: 11px; }
+
+  /* segmented control (AI backend) */
+  .segmented { display: flex; background: var(--bg); border: 1px solid var(--border-strong);
+    border-radius: 8px; padding: 2px; gap: 2px; margin-bottom: 10px; }
+  .segmented button { flex: 1; border: none; border-radius: 6px; background: transparent;
+    color: var(--text2); padding: 5px 8px; font-size: 12px; }
+  .segmented button.sel { background: var(--surface); color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.18); font-weight: 600; }
+
+  /* drop zone */
+  #dropzone { border: 1.5px dashed var(--border-strong); border-radius: 10px;
+    padding: 12px; text-align: center; color: var(--text3); font-size: 12px;
+    margin-bottom: 10px; transition: border-color 150ms ease, background-color 150ms ease; }
+  #dropzone.dragover { border-color: var(--accent); background: var(--accent-soft);
+    color: var(--accent); }
+
+  /* question card */
+  .question-card { background: var(--surface); border: 1px solid var(--accent);
+    border-radius: 12px; padding: 16px; margin-bottom: 14px; display: none;
+    box-shadow: var(--shadow); }
+  .question-card.visible { display: block; }
+  .question-card .q { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+  .question-card .a { color: var(--accent); font-weight: 650; margin-bottom: 6px; }
+  .question-card .meta { color: var(--text3); font-size: 11px; margin-bottom: 12px; }
+  .question-card .actions { display: flex; gap: 8px; }
+  .question-card .actions input { flex: 1; }
+  .question-card .skipped-note { color: var(--text2); font-size: 12px; margin-top: 10px; }
+
+  /* activity log */
+  #log { background: var(--log-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; height: 180px; overflow-y: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
+    color: var(--text2); }
+  #log .line { margin-bottom: 2px; word-break: break-word; }
+  #log .line.err { color: var(--danger); }
+  #log .line.ok { color: var(--accent); }
+  #log .empty { color: var(--text3); font-style: italic; }
+
+  .hint { color: var(--text3); font-size: 11px; line-height: 1.5; }
+
+  .modeltest { font-size: 12px; color: var(--text2); line-height: 1.45;
+    padding-top: 4px; word-break: break-word; }
+  .modeltest.ok { color: var(--accent); font-weight: 600; }
+  .modeltest.err { color: var(--danger); font-weight: 600; }
+
+  /* map page */
+  #pageLocation { }
+  .mapcard { flex: 1; display: flex; flex-direction: column; min-height: 0;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  .mapcard .maptools { padding: 12px 14px; border-bottom: 1px solid var(--border);
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #map { flex: 1; min-height: 0; background: var(--log-bg); }
+  .mapcard .coords { padding: 8px 14px; color: var(--text3); font-size: 11px;
+    border-top: 1px solid var(--border); }
+
+  .pin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff; }
+  .pin.current { background: #98989D; box-shadow: 0 0 12px 2px rgba(148,163,184,0.7); }
+  .pin.fake { background: var(--accent); box-shadow: 0 0 12px 2px var(--accent-soft); }
+
+  /* modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+    z-index: 2000; display: none; align-items: center; justify-content: center; }
+  .modal-backdrop.visible { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px; width: 460px; max-width: 90vw; box-shadow: var(--shadow); }
+  .modal h2 { font-size: 15px; margin: 0 0 8px; }
+  .modal p { color: var(--text2); font-size: 12px; line-height: 1.5; margin: 0 0 14px; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+  <div id="splash">
+    <div class="spinner"></div>
+    <div class="t">Poll Everywhere Abuse</div>
+    <div class="s">loading…</div>
+  </div>
+
+  <div id="realui"><div class="app">
+
+  <nav class="sidebar">
+    <div class="appname">Poll Everywhere</div>
+    <button class="navitem active" id="navWatch" data-page="pageWatch">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 7 12 10 5 14 19 17 12 21 12"/></svg>
+      Watch
+    </button>
+    <button class="navitem" id="navLocation" data-page="pageLocation">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-5.1-7-11a7 7 0 1 1 14 0c0 5.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+      Location
+    </button>
+    <button class="navitem" id="navSettings" data-page="pageSettings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2.2" fill="var(--surface2)"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2.2" fill="var(--surface2)"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2.2" fill="var(--surface2)"/></svg>
+      Settings
+    </button>
+  </nav>
+
+  <div class="content">
+    <div class="topbar">
+      <div class="pagetitle" id="pageTitle">Watch</div>
+      <div class="spacer"></div>
+      <div class="statuspill" id="statusPill">
+        <div class="dot" id="statusDot"></div>
+        <div id="statusText">Idle</div>
+      </div>
+      <button id="startStopBtn" class="btn-primary">Start</button>
+    </div>
+
+    <div class="pages">
+
+      <!-- ============ WATCH ============ -->
+      <div class="page active" id="pageWatch">
+        <div class="question-card" id="questionCard">
+          <div class="q" id="qcQuestion"></div>
+          <div class="a" id="qcAnswer"></div>
+          <div class="meta" id="qcMeta"></div>
+          <div class="actions" id="qcActions">
+            <button id="qcAccept" class="btn-primary btn-small">Accept</button>
+            <button id="qcSkip" class="btn-quiet btn-small">Skip</button>
+            <input type="text" id="qcCustom" placeholder="Or type your own answer" style="display:none;">
+            <button id="qcSend" class="btn-primary btn-small" style="display:none;">Send</button>
+          </div>
+          <div class="skipped-note" id="qcNote" style="display:none;"></div>
+        </div>
+
+        <div class="card">
+          <h3>Poll</h3>
+          <div id="dropzone">Drag the pollev.com link here, or paste it below</div>
+          <div class="field">
+            <label for="pollUrl">Poll link</label>
+            <input type="text" id="pollUrl" placeholder="https://pollev.com/...">
+          </div>
+          <div class="field">
+            <label for="username">Screen name</label>
+            <input type="text" id="username" placeholder="Name you register as, e.g. abc123">
+          </div>
+          <div class="footnote">Tip: paste the link your professor shares. The watcher keeps a browser window open for it — if the class requires login, complete it once in that window and it's remembered.</div>
+        </div>
+
+        <div class="card">
+          <h3>Activity</h3>
+          <div id="log"><div class="empty">Nothing yet — activity will appear here.</div></div>
+        </div>
+      </div>
+
+      <!-- ============ LOCATION ============ -->
+      <div class="page flexcol" id="pageLocation">
+        <div class="mapcard">
+          <div class="maptools">
+            <div class="row" style="flex:1;">
+              <input type="text" id="placeSearch" placeholder="Search a place, or lat,lon">
+              <button id="searchBtn" class="btn-primary btn-small" style="flex:none;">Go</button>
+            </div>
+            <label class="switch" style="flex:none;">
+              <input type="checkbox" id="geoEnabled" checked>
+              <span>Send fake location</span>
+            </label>
+          </div>
+          <div id="map"></div>
+          <div class="coords" id="coordsLabel">no location set</div>
+        </div>
+        <div class="hint" style="padding:10px 4px 0;">On: PollEv sees the green pin — click the map to move it. Off: PollEv gets no location at all.</div>
+      </div>
+
+      <!-- ============ SETTINGS ============ -->
+      <div class="page" id="pageSettings">
+        <div class="card">
+          <h3>AI answering</h3>
+          <label class="switch"><input type="checkbox" id="aiEnabled" checked><span>AI auto-answer</span></label>
+          <div class="hint" id="aiHint" style="margin:2px 0 12px;">AI answers poll questions automatically.</div>
+          <label class="switch"><input type="checkbox" id="aiConfirm"><span>Require confirmation before submitting</span></label>
+          <div class="hint" style="margin:2px 0 14px;">On: every answer waits for you (Accept in-app, or reply to the text). Off: submits as soon as the AI answers.</div>
+
+          <div class="field">
+            <label>Backend</label>
+            <div class="segmented" id="aiBackendSeg">
+              <button data-backend="nrp">NRP gateway</button>
+              <button data-backend="subscription">Claude</button>
+              <button data-backend="codex">Codex</button>
+            </div>
+          </div>
+          <div class="row" style="margin-bottom:10px;">
+            <div class="field" style="flex:1; margin:0;">
+              <label for="aiModel">Model</label>
+              <select id="aiModel"><option value="">loading models...</option></select>
+            </div>
+            <div class="field" style="flex:1; margin:0;">
+              <label for="aiEffort">Effort</label>
+              <select id="aiEffort">
+                <option value="">default</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
+                <option value="max">max</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="align-items:flex-start;">
+            <button id="testModelBtn" class="btn-quiet btn-small" style="flex:none;">Test model</button>
+            <div class="modeltest" id="modelTestResult" style="flex:1;"></div>
+          </div>
+          <div class="footnote">NRP: free Cornell/Nautilus research models. Claude / Codex: your own `claude` / `codex` login. Test fires one real call so you know it works before class.</div>
+        </div>
+
+        <div class="card">
+          <h3>Notifications</h3>
+          <div class="row" style="margin-bottom:10px;">
+            <label class="switch" style="flex:1;"><input type="checkbox" id="notifyMac" checked><span>macOS</span></label>
+            <label class="switch" style="flex:1;"><input type="checkbox" id="notifySound" checked><span>Sound</span></label>
+            <button id="testMacBtn" class="btn-quiet btn-small" style="flex:none;">Test</button>
+          </div>
+          <div class="row" style="margin-bottom:10px;">
+            <label class="switch" style="flex:none;"><input type="checkbox" id="notifyNtfy" checked><span>ntfy</span></label>
+            <input type="text" id="ntfyTopic" placeholder="topic (any unique word)">
+            <button id="testNtfyBtn" class="btn-quiet btn-small" style="flex:none;">Test</button>
+          </div>
+          <div class="row">
+            <label class="switch" style="flex:none;"><input type="checkbox" id="notifyImessage" checked><span>iMessage</span></label>
+            <input type="text" id="imessageRecipient" placeholder="+1555… or your iMessage email">
+            <button id="testImessageBtn" class="btn-quiet btn-small" style="flex:none;">Test</button>
+          </div>
+          <div class="footnote">ntfy: install the ntfy app on your phone and subscribe to the same topic. iMessage: texts you every question — and if you reply, that reply confirms/answers it (needs Full Disk Access, one time).</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  </div></div><!-- /realui /.app -->
+
+  <div class="modal-backdrop" id="setupModal">
+    <div class="modal">
+      <h2>First-run setup</h2>
+      <p id="setupBody"></p>
+      <div class="actions">
+        <button id="setupInstallBtn" class="btn-primary">Install Google Chrome</button>
+        <button id="setupCloseBtn" class="btn-quiet">Close</button>
+      </div>
+    </div>
+  </div>
+
+<script src="{static}/leaflet.js"></script>
+<script>
+  // ---------- splash / two-stage boot ----------
+  // The window opens showing only the splash. Python attaches the real API
+  // bridge after its slow imports finish (via window.expose), which just
+  // re-runs _createApi -- it does NOT re-fire 'pywebviewready' (that fires
+  // once at page load, with the bridge still empty in this design). So we
+  // poll for the first real api stub, then swap in the real UI.
+  window.__apiReady = false;
+  window.__apiAttachWaiters = [];
+  function whenApiReady(fn) {
+    if (window.__apiReady) fn();
+    else window.__apiAttachWaiters.push(fn);
+  }
+  const apiPoll = setInterval(() => {
+    if (window.pywebview && window.pywebview.api && pywebview.api.get_config) {
+      clearInterval(apiPoll);
+      window.__apiReady = true;
+      document.getElementById('splash').style.display = 'none';
+      document.getElementById('realui').style.display = 'block';
+      for (const fn of window.__apiAttachWaiters.splice(0)) fn();
+    }
+  }, 50);
+
+  // ---------- state ----------
+  let config = null;
+  let fakeMarker = null;
+
+  const $ = (id) => document.getElementById(id);
+
+  function logLine(text, cls) {
+    const log = $('log');
+    const empty = log.querySelector('.empty');
+    if (empty) empty.remove();
+    const el = document.createElement('div');
+    el.className = 'line' + (cls ? ' ' + cls : '');
+    el.textContent = text;
+    log.appendChild(el);
+    while (log.childElementCount > 200) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // ---------- navigation ----------
+  const PAGES = [
+    ['navWatch', 'pageWatch', 'Watch'],
+    ['navLocation', 'pageLocation', 'Location'],
+    ['navSettings', 'pageSettings', 'Settings'],
+  ];
+  for (const [navId, pageId, title] of PAGES) {
+    $(navId).addEventListener('click', () => {
+      for (const [n, p] of PAGES) {
+        $(n).classList.toggle('active', n === navId);
+        $(p).classList.toggle('active', p === pageId);
+      }
+      $('pageTitle').textContent = title;
+      if (pageId === 'pageLocation') setTimeout(() => map.invalidateSize(), 30);
+    });
+  }
+
+  // ---------- map ----------
+  const map = L.map('map', { worldCopyJump: true, zoomControl: true }).setView([20, 0], 2);
+  const TILE_ATTR = '&copy; OpenStreetMap contributors &copy; Esri';
+  let tileLayers = [];
+  function setTileTheme() {
+    for (const l of tileLayers) map.removeLayer(l);
+    tileLayers = [];
+    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const base = dark
+      ? 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
+      : 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+    const ref = dark
+      ? 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}'
+      : 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}';
+    tileLayers.push(L.tileLayer(base, { attribution: TILE_ATTR, maxZoom: 16 }).addTo(map));
+    tileLayers.push(L.tileLayer(ref, { maxZoom: 16 }).addTo(map));
+  }
+  setTileTheme();
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', setTileTheme);
+
+  function pinIcon(cls) {
+    return L.divIcon({ className: '', html: `<div class="pin ${cls}"></div>`, iconSize: [18, 18] });
+  }
+
+  function setFakePin(lat, lon, label) {
+    if (fakeMarker) fakeMarker.setLatLng([lat, lon]);
+    else fakeMarker = L.marker([lat, lon], { icon: pinIcon('fake') }).addTo(map);
+    map.setView([lat, lon], Math.max(map.getZoom(), 13));
+    $('coordsLabel').textContent = (label ? label + ' — ' : '') + `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+    if (config) { config.geo_lat = lat; config.geo_lon = lon; }
+  }
+
+  map.on('click', (e) => {
+    setFakePin(e.latlng.lat, e.latlng.lng, 'map click');
+    saveConfig();
+  });
+
+  // gray "you (approx.)" pin, like geo-spoofer
+  whenApiReady(() => {
+    pywebview.api.approx_current_location().then((r) => {
+      if (r.ok) L.marker([r.lat, r.lon], { icon: pinIcon('current') }).addTo(map);
+    });
+  });
+
+  // ---------- config form ----------
+  const FORM_FIELDS = {
+    poll_url: 'pollUrl', username: 'username',
+    ai_enabled: 'aiEnabled', ai_require_confirmation: 'aiConfirm',
+    ai_model: 'aiModel', ai_effort: 'aiEffort',
+    notify_mac: 'notifyMac', notify_sound: 'notifySound',
+    notify_ntfy: 'notifyNtfy', ntfy_topic: 'ntfyTopic',
+    notify_imessage: 'notifyImessage', imessage_recipient: 'imessageRecipient',
+    geolocation_enabled: 'geoEnabled',
+  };
+
+  function fillForm(cfg) {
+    config = cfg;
+    for (const [key, id] of Object.entries(FORM_FIELDS)) {
+      const el = $(id);
+      if (!el) continue;
+      if (el.type === 'checkbox') el.checked = !!cfg[key];
+      else el.value = cfg[key] ?? '';
+    }
+    syncBackendSeg();
+    if (cfg.geo_lat && cfg.geo_lon) {
+      setFakePin(cfg.geo_lat, cfg.geo_lon, 'saved');
+    }
+    syncAiHint();
+    loadModels();
+  }
+
+  function collectForm() {
+    const cfg = { ...config };
+    for (const [key, id] of Object.entries(FORM_FIELDS)) {
+      const el = $(id);
+      if (!el) continue;
+      if (el.type === 'checkbox') cfg[key] = el.checked;
+      else cfg[key] = el.value;
+    }
+    cfg.geo_lat = config.geo_lat; cfg.geo_lon = config.geo_lon;
+    return cfg;
+  }
+
+  let saveTimer = null;
+  function saveConfig() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      pywebview.api.save_config(collectForm()).catch((e) => logLine('save failed: ' + e.message, 'err'));
+    }, 300);
+  }
+  // change+input on every field; selects fire change, text inputs fire input.
+  // The debounced save makes the double-fire on selects harmless.
+  for (const id of Object.values(FORM_FIELDS)) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener('change', saveConfig);
+    el.addEventListener('input', saveConfig);
+  }
+
+  function syncAiHint() {
+    $('aiHint').textContent = $('aiEnabled').checked
+      ? 'AI answers poll questions automatically.'
+      : 'AI off = detect + notify only, nothing is ever submitted.';
+  }
+  $('aiEnabled').addEventListener('change', () => { syncAiHint(); saveConfig(); });
+
+  // ---------- drag & drop / paste ----------
+  const dz = $('dropzone');
+  ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, (e) => {
+    e.preventDefault(); dz.classList.add('dragover');
+  }));
+  ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, (e) => {
+    e.preventDefault(); dz.classList.remove('dragover');
+  }));
+  dz.addEventListener('drop', (e) => {
+    const text = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text/uri-list');
+    if (text && text.includes('pollev.com')) { $('pollUrl').value = text.trim(); saveConfig(); }
+    else logLine('not a pollev.com link: ' + text, 'err');
+  });
+  $('pollUrl').addEventListener('paste', () => setTimeout(saveConfig, 0));
+
+  // ---------- models ----------
+  // Per-backend default when the saved model belongs to a different backend
+  // (e.g. qwen3 left over from NRP after switching to Codex).
+  const DEFAULT_MODEL = { nrp: 'qwen3', subscription: 'sonnet', codex: 'gpt-6-sol' };
+
+  function syncBackendSeg() {
+    for (const b of $('aiBackendSeg').querySelectorAll('button')) {
+      b.classList.toggle('sel', b.dataset.backend === config.ai_backend);
+    }
+  }
+
+  function loadModels() {
+    $('aiModel').innerHTML = '<option value="">loading...</option>';
+    pywebview.api.list_models().then((r) => {
+      const sel = $('aiModel');
+      sel.innerHTML = '';
+      if (!r.ok) {
+        sel.innerHTML = '<option value="">' + (r.error || 'unavailable').slice(0, 60) + '</option>';
+        logLine('model list failed: ' + r.error, 'err');
+        return;
+      }
+      const saved = config.ai_model;
+      const inList = saved && r.models.includes(saved);
+      for (const m of r.models) {
+        const opt = document.createElement('option');
+        opt.value = m; opt.textContent = m;
+        opt.selected = inList ? m === saved : m === (DEFAULT_MODEL[config.ai_backend] || r.models[0]);
+        sel.appendChild(opt);
+      }
+      if (saved && !inList) {
+        // Keep the stale value visible but unselected: it documents what was
+        // saved, and the default above is what actually gets used/saved next.
+        const opt = document.createElement('option');
+        opt.value = saved; opt.textContent = saved + ' (other backend)';
+        sel.insertBefore(opt, sel.firstChild);
+      }
+      const chosen = sel.value;
+      if (chosen !== saved) { config.ai_model = chosen; saveConfig(); }
+    });
+  }
+
+  $('aiBackendSeg').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-backend]');
+    if (!btn || !config) return;
+    config.ai_backend = btn.dataset.backend;
+    syncBackendSeg();
+    saveConfig();
+    loadModels();
+  });
+
+  $('testModelBtn').addEventListener('click', () => {
+    const model = $('aiModel').value;
+    $('testModelBtn').disabled = true;
+    $('testModelBtn').textContent = 'Testing…';
+    $('modelTestResult').className = 'modeltest';
+    $('modelTestResult').textContent = 'Calling ' + model + ' (one real call, can take ~30s)...';
+    pywebview.api.test_model(model).then((r) => {
+      const ok = r.ok;
+      $('modelTestResult').className = 'modeltest ' + (ok ? 'ok' : 'err');
+      $('modelTestResult').textContent = (ok ? '✓ Works — ' : '✗ Failed — ') + r.message;
+      logLine('model test (' + model + '): ' + (ok ? 'OK — ' + r.message : 'FAILED — ' + r.message), ok ? 'ok' : 'err');
+    }).catch((e) => {
+      $('modelTestResult').className = 'modeltest err';
+      $('modelTestResult').textContent = '✗ ' + e.message;
+    }).finally(() => { $('testModelBtn').disabled = false; $('testModelBtn').textContent = 'Test model'; });
+  });
+
+  // ---------- notifications ----------
+  const CHANNEL_BTNS = { testMacBtn: 'mac', testNtfyBtn: 'ntfy', testImessageBtn: 'imessage' };
+  for (const [btnId, channel] of Object.entries(CHANNEL_BTNS)) {
+    $(btnId).addEventListener('click', () => {
+      pywebview.api.test_channel(channel).then((r) => {
+        logLine(channel + ' test: ' + (r.ok ? 'sent' : r.error), r.ok ? 'ok' : 'err');
+      });
+    });
+  }
+
+  // ---------- start/stop ----------
+  $('startStopBtn').addEventListener('click', () => {
+    if ($('startStopBtn').textContent === 'Start') {
+      saveConfig();
+      pywebview.api.start_watch().then((r) => {
+        if (!r.ok) (r.problems || []).forEach((p) => logLine('can\'t start: ' + p, 'err'));
+      });
+    } else {
+      pywebview.api.stop_watch().then((r) => logLine(r.ok ? 'stopped' : 'stop failed (still running?)', r.ok ? 'ok' : 'err'));
+    }
+  });
+
+  // ---------- pending decision card ----------
+  function showPending(p) {
+    $('questionCard').classList.add('visible');
+    $('qcQuestion').textContent = 'Q: ' + p.question;
+    $('qcAnswer').textContent = 'AI answer: ' + p.answer + (p.confidence != null ? '  (' + p.confidence + '/100)' : '');
+    $('qcMeta').textContent = 'mode: ' + p.mode;
+    const isShort = p.mode === 'short_answer';
+    $('qcCustom').style.display = isShort ? '' : 'none';
+    $('qcSend').style.display = isShort ? '' : 'none';
+    $('qcAccept').textContent = isShort ? 'Submit AI\'s' : 'Accept';
+    $('qcNote').style.display = 'none';
+  }
+  function hidePending(note) {
+    $('qcNote').textContent = note || '';
+    $('qcNote').style.display = note ? '' : 'none';
+    setTimeout(() => {
+      if (!$('questionCard').dataset.sticky) $('questionCard').classList.remove('visible');
+    }, note ? 4000 : 0);
+  }
+
+  $('qcAccept').addEventListener('click', () => pywebview.api.decide('accept').then((r) => {
+    if (r.resolved) hidePending('accepted — submitting');
+  }));
+  $('qcSkip').addEventListener('click', () => pywebview.api.decide('skip').then((r) => {
+    if (r.resolved) hidePending('skipped');
+  }));
+  $('qcSend').addEventListener('click', () => {
+    const text = $('qcCustom').value.trim();
+    if (!text) return;
+    pywebview.api.decide('send', text).then((r) => {
+      if (r.resolved) { hidePending('sent: ' + text); $('qcCustom').value = ''; }
+    });
+  });
+
+  // ---------- map search ----------
+  $('searchBtn').addEventListener('click', () => {
+    const text = $('placeSearch').value.trim();
+    if (!text) return;
+    $('searchBtn').disabled = true;
+    pywebview.api.resolve_place(text).then((r) => {
+      if (r.ok) {
+        setFakePin(r.lat, r.lon, r.name);
+        saveConfig();
+        logLine('location set: ' + r.name);
+      } else {
+        logLine('search failed: ' + r.error, 'err');
+      }
+    }).finally(() => { $('searchBtn').disabled = false; });
+  });
+  $('placeSearch').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('searchBtn').click();
+  });
+
+  // ---------- setup modal ----------
+  $('setupCloseBtn').addEventListener('click', () => $('setupModal').classList.remove('visible'));
+  $('setupInstallBtn').addEventListener('click', () => {
+    $('setupInstallBtn').disabled = true;
+    $('setupInstallBtn').textContent = 'Installing Google Chrome...';
+    pywebview.api.install_playwright().then((r) => {
+      $('setupInstallBtn').disabled = false;
+      $('setupInstallBtn').textContent = 'Install Google Chrome';
+      if (r.ok) {
+        $('setupModal').classList.remove('visible');
+        logLine('Google Chrome installed', 'ok');
+      } else {
+        logLine('Google Chrome install failed: ' + r.output, 'err');
+      }
+    });
+  });
+
+  // ---------- event/state polling ----------
+  const STATE_LABEL = { idle: 'Idle', starting: 'Starting...', watching: 'Watching', stopping: 'Stopping...', stopped: 'Stopped', crashed: 'Crashed' };
+
+  function renderState(s) {
+    const pill = $('statusPill');
+    pill.className = 'statuspill' + (s.running ? ' running' : '') + (s.state === 'crashed' ? ' crashed' : '');
+    $('statusText').textContent = STATE_LABEL[s.state] || s.state;
+    if (s.state === 'crashed' && s.last_error) $('statusText').textContent += ' — ' + s.last_error.slice(0, 80);
+    const btn = $('startStopBtn');
+    btn.textContent = s.running ? 'Stop' : 'Start';
+    btn.className = s.running ? 'btn-stop' : 'btn-primary';
+  }
+
+  let lastPendingAt = 0;
+  function tick() {
+    pywebview.api.get_events().then((events) => {
+      for (const ev of events) {
+        if (ev.event === 'state') { logLine('state: ' + ev.state + (ev.error ? ' — ' + ev.error : ''), ev.state === 'crashed' ? 'err' : ''); }
+        else if (ev.event === 'sso_wall') { logLine('SSO wall: ' + ev.phase + ' — finish login in the browser window', 'err'); }
+        else if (ev.event === 'reasoning') { logLine('question: ' + ev.question); }
+        else if (ev.event === 'awaiting_reply') { lastPendingAt = Date.now(); showPending({ ...ev, mode: ev.mode, question: ev.question, answer: ev.answer, confidence: ev.confidence }); logLine('awaiting your ' + (ev.mode === 'short_answer' ? 'answer' : 'confirmation') + '...'); }
+        else if (ev.event === 'result') { logLine('result: ' + ev.status, ev.status.startsWith('SUBMITTED') ? 'ok' : (ev.status.startsWith('FAILED') ? 'err' : '')); hidePending(ev.status); }
+        else if (ev.event === 'log') { logLine(ev.message); }
+      }
+    });
+    pywebview.api.get_state().then((s) => {
+      renderState(s);
+      if (s.pending && Date.now() - lastPendingAt > 3000) {
+        // restore the card after a reload/re-open
+        lastPendingAt = Date.now();
+        showPending(s.pending);
+      }
+      if (!s.pending) $('questionCard').dataset.sticky = '';
+    });
+  }
+
+  whenApiReady(() => {
+    pywebview.api.get_config().then(fillForm);
+    pywebview.api.check_playwright().then((r) => {
+      if (!r.ok) {
+        $('setupBody').textContent = 'No Chrome-family browser found (' + (r.error || r.path) + '). The watcher drives Google Chrome, Chromium, Brave or Edge with its own separate profile. Install Google Chrome now (via Homebrew, ~200MB)?';
+        $('setupModal').classList.add('visible');
+      }
+    });
+    setInterval(tick, 1000);
+    tick();
+  });
+</script>
+</body>
+</html>
