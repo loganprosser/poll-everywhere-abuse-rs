@@ -1,2 +1,6 @@
 target/
 dist/
+.DS_Store
+*.log
+pollev_logs/
+.env
