@@ -143,7 +143,16 @@ fn py_display(v: &Value) -> String {
 /// fatal error (Err, after emitting state "crashed" and a crash notification).
 pub fn run(opts: RunOptions) -> Result<()> {
     emit(&opts, state_event("starting"));
-    match watch(&opts) {
+    // A panic must still reach the crash path (and the crash notification).
+    let res = catch_unwind(AssertUnwindSafe(|| watch(&opts))).unwrap_or_else(|p| {
+        let m = p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic".into());
+        Err(anyhow!("the watcher thread panicked: {m}"))
+    });
+    match res {
         Ok(()) => {
             log(
                 &opts.logs_dir,
@@ -153,9 +162,19 @@ pub fn run(opts: RunOptions) -> Result<()> {
             Ok(())
         }
         Err(e) => {
+            let msg = format!("{e:#}");
+            // Stop during launch/navigation can't interrupt them; their failure
+            // after the user asked to stop is not a crash worth a push alert.
+            if opts.stop.load(Ordering::SeqCst) {
+                log(
+                    &opts.logs_dir,
+                    &format!("[ai_answer] stopped (stop requested; ignoring error: {msg})"),
+                );
+                emit(&opts, state_event("stopped"));
+                return Ok(());
+            }
             // Anything that escapes would otherwise die silently; text it too,
             // since the point is running this unattended during class.
-            let msg = format!("{e:#}");
             log(&opts.logs_dir, &format!("[ai_answer] CRASHED: {msg}"));
             emit(
                 &opts,
@@ -181,7 +200,13 @@ struct Watch {
     mid_session: bool,
     startup_wall_sent: bool,
     question_seen: bool,
+    /// When we first saw pollev.com. The SPA shell is on pollev.com before a
+    /// login wall renders, so "watching" waits for a question or WALL_GRACE.
+    on_pollev_since: Option<Instant>,
 }
+
+/// Python polled for the wall for 5s after load; same settle time here.
+const WALL_GRACE: Duration = Duration::from_secs(5);
 
 impl Watch {
     /// One look at the page: setup actions, wall bookkeeping, then the live
@@ -231,7 +256,12 @@ impl Watch {
         }
         let q = poll::get_current_question(page)?;
         self.question_seen |= q.is_some();
-        if !self.watching && (st.on_pollev || q.is_some()) {
+        if st.on_pollev && self.on_pollev_since.is_none() {
+            self.on_pollev_since = Some(Instant::now());
+        }
+        if !self.watching
+            && (q.is_some() || self.on_pollev_since.is_some_and(|t| t.elapsed() >= WALL_GRACE))
+        {
             self.watching = true;
             emit(opts, state_event("watching"));
             log(
@@ -268,6 +298,7 @@ fn watch(opts: &RunOptions) -> Result<()> {
         mid_session: false,
         startup_wall_sent: false,
         question_seen: false,
+        on_pollev_since: None,
     };
     let mut last_question_id: Option<i64> = None;
     let mut errors = 0u32;
@@ -565,6 +596,10 @@ pub fn answer_question(browser: &Browser, q: &Question, opts: &RunOptions) -> Va
             }
         }
 
+        // Auto mode notifies synchronously above; Stop pressed meanwhile wins.
+        if status.is_none() && opts.stop.load(Ordering::SeqCst) {
+            status = Some("SKIPPED (stopped)".into());
+        }
         if status.is_none() {
             status = Some(match poll::submit_answer(browser.page(), q, &answer) {
                 Ok(_) => "SUBMITTED".to_string(),
@@ -993,6 +1028,7 @@ impl WatcherService {
         let startup_test = (cfg.ai_test_on_startup && ai.is_some())
             .then(|| ai.as_ref().map(|a| a.0.clone()))
             .flatten();
+        let test_stop = stop.clone();
         let opts = RunOptions {
             poll_url: cfg.poll_url.trim().to_string(),
             username: cfg.username.trim().to_string(),
@@ -1021,7 +1057,10 @@ impl WatcherService {
                         shared
                             .events
                             .put(json!({"event": "log", "message": "Testing AI backend..."}));
-                        let (ok, detail) = ai::test_backend(f);
+                        let (ok, detail) = ai::test_backend(f, &test_stop);
+                        if test_stop.load(Ordering::SeqCst) {
+                            return Ok(()); // Stop pressed during the self-test
+                        }
                         if !ok {
                             bail!("AI backend startup test failed: {detail}");
                         }
@@ -1118,8 +1157,10 @@ impl WatcherService {
         let res = match (p.mode, decision) {
             (Mode::Confirm, "accept") => Resolution::Approve(true),
             (Mode::Confirm, "skip") => Resolution::Approve(false),
-            // Accept = the AI's suggestion as-is.
-            (Mode::ShortAnswer, "accept") => Resolution::Reply(Some(py_display(&p.answer))),
+            // Accept = the AI's suggestion as-is. "lgtm" is an approval, so
+            // resolve_short_answer_reply keeps the AI text verbatim (passing the
+            // text itself would strip a leading "use"/"change to").
+            (Mode::ShortAnswer, "accept") => Resolution::Reply(Some("lgtm".to_string())),
             (Mode::ShortAnswer, "send") => Resolution::Reply(Some(text.to_string())),
             (Mode::ShortAnswer, "skip") => Resolution::Reply(None),
             (mode, _) => {
@@ -1227,7 +1268,13 @@ mod tests {
         assert_eq!(svc.decide("accept", ""), json!({"resolved": true}));
         assert_eq!(
             s.wait(Duration::ZERO).unwrap().0,
-            Resolution::Reply(Some("AI".into()))
+            // "lgtm" so the AI text is submitted verbatim (see decide()).
+            Resolution::Reply(Some("lgtm".into()))
+        );
+        // Accept must not mangle an answer that starts with an override word.
+        assert_eq!(
+            ai::resolve_short_answer_reply(Some("lgtm"), "Use cases"),
+            Some("Use cases".into())
         );
     }
 

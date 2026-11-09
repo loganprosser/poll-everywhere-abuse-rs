@@ -227,6 +227,31 @@ fn find_page_target(
     }
 }
 
+/// Pids of Chrome processes we launched and have not yet reaped, so a Quit
+/// that can't wait for the watcher thread can still avoid orphaning them.
+static LIVE_PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+fn live_pids() -> std::sync::MutexGuard<'static, Vec<u32>> {
+    LIVE_PIDS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn forget_pid(pid: u32) {
+    live_pids().retain(|p| *p != pid);
+}
+
+/// SIGKILL every Chrome we launched that is still running. Last resort for
+/// app exit: Chrome's helpers die with the browser process and the profile
+/// lock it leaves behind names a dead pid, which the next Chrome ignores.
+pub fn kill_all_browsers() {
+    let pids: Vec<u32> = std::mem::take(&mut *live_pids());
+    for pid in pids {
+        let _ = Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 /// A running browser. Dropping it closes Chrome (gracefully first, so the
 /// profile flushes cookies, then kill).
 pub struct Browser {
@@ -278,6 +303,7 @@ impl Browser {
         let mut child = cmd
             .spawn()
             .with_context(|| format!("starting {}", exe.display()))?;
+        live_pids().push(child.id());
         match Self::connect(&mut child, &opts.profile_dir, started) {
             Ok((port, conn, page)) => Ok(Browser {
                 child: Mutex::new(child),
@@ -288,6 +314,7 @@ impl Browser {
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                forget_pid(child.id());
                 Err(e)
             }
         }
@@ -434,6 +461,7 @@ impl Drop for Browser {
             }
         }
         let _ = child.wait();
+        forget_pid(child.id());
     }
 }
 

@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tao::dpi::LogicalSize;
@@ -183,7 +184,11 @@ fn run_inner() -> Result<()> {
             }
             // Also covers Cmd-Q, which skips CloseRequested.
             Event::LoopDestroyed => {
-                api.watcher.stop(Duration::from_secs(10));
+                // If the watcher is stuck (launch, navigation, a hung CDP call),
+                // process::exit follows and would orphan Chrome with its profile lock.
+                if !api.watcher.stop(Duration::from_secs(10)) {
+                    crate::cdp::kill_all_browsers();
+                }
             }
             _ => {}
         }
@@ -543,7 +548,7 @@ impl Api {
             ai::answer_schema(),
             std::env::temp_dir(),
         )
-        .map(|f| ai::test_backend(&f));
+        .map(|f| ai::test_backend(&f, &AtomicBool::new(false)));
         match result {
             Ok((ok, detail)) => json!({"ok": ok, "message": detail}),
             Err(e) => json!({"ok": false, "message": format!("{e:#}")}),

@@ -710,7 +710,8 @@ impl PageSetup {
         let snap: Snapshot = serde_json::from_value(page.eval(&setup_snapshot_js())?)
             .context("unexpected page snapshot")?;
         let on_pollev = url_on_pollev(&snap.url);
-        let wall = on_pollev && sso_wall_showing(&snap.text);
+        // Only with no live question: its text can contain wall phrases (Python parity).
+        let wall = on_pollev && !snap.activity && sso_wall_showing(&snap.text);
         let status = SetupStatus {
             on_pollev,
             wall,

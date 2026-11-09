@@ -710,11 +710,10 @@ pub fn make_ai_fn(
 }
 
 /// One trivial real call (ai_answer.test_ai_backend): (ok, readable detail).
-pub fn test_backend(f: &AiFn) -> (bool, String) {
-    let stop = AtomicBool::new(false);
+pub fn test_backend(f: &AiFn, stop: &AtomicBool) -> (bool, String) {
     let r = f(
         "Reply with answer \"ready\" and confidence 100. This is a startup check, not a real question.",
-        &stop,
+        stop,
     )
     .and_then(|raw| parse_ai_response(&raw));
     match r {
@@ -1075,9 +1074,9 @@ mod tests {
         let ok: AiFn = Arc::new(|_, _| {
             Ok("{\"answer\":\"ready\",\"confidence\":100,\"reasoning\":\"\"}".into())
         });
-        assert_eq!(test_backend(&ok), (true, "answered 'ready'".into()));
+        assert_eq!(test_backend(&ok, &AtomicBool::new(false)), (true, "answered 'ready'".into()));
         let bad: AiFn = Arc::new(|_, _| bail!("no login"));
-        assert_eq!(test_backend(&bad), (false, "no login".into()));
+        assert_eq!(test_backend(&bad, &AtomicBool::new(false)), (false, "no login".into()));
     }
 
     fn pid_alive(pidf: &Path) -> bool {

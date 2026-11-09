@@ -18,7 +18,7 @@ app: target/.installed  ## Build dist/Poll Everywhere Abuse.app
 
 # Run the GUI from source, no packaging.
 run: target/.installed  ## Launch the GUI from source
-	cargo run --release
+	PATH="/opt/homebrew/bin:/usr/local/bin:$$HOME/.cargo/bin:$$PATH" cargo run --release
 
 test: target/.installed  ## Offline tests (no network, no AI, nothing sent)
-	cargo test --release
+	PATH="/opt/homebrew/bin:/usr/local/bin:$$HOME/.cargo/bin:$$PATH" cargo test --release

@@ -7,20 +7,22 @@ cd "$(dirname "$0")/.."
 
 say() { printf '\n==> %s\n' "$*"; }
 
-say "checking for Homebrew"
 # The Homebrew installer only puts brew on PATH if you ran the lines it
-# printed at the end, so check the standard locations too.
+# printed at the end, so check the standard locations too. Homebrew is only
+# required to install Rust, so someone with a rustup cargo can go without it.
 BREW="$(command -v brew || ls /opt/homebrew/bin/brew /usr/local/bin/brew 2>/dev/null | head -1 || true)"
-if [ -z "$BREW" ]; then
-  echo "Homebrew isn't installed. Install it first (paste into Terminal, from https://brew.sh):" >&2
-  echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
-  exit 1
-fi
-BREW_BIN="$("$BREW" --prefix)/bin"
-export PATH="$BREW_BIN:$HOME/.cargo/bin:$PATH"
+BREW_BIN=""
+if [ -n "$BREW" ]; then BREW_BIN="$("$BREW" --prefix)/bin"; fi
+export PATH="${BREW_BIN:+$BREW_BIN:}$HOME/.cargo/bin:$PATH"
 
 say "checking for Rust (cargo)"
 if ! command -v cargo >/dev/null; then
+  if [ -z "$BREW" ]; then
+    echo "Rust isn't installed and neither is Homebrew. Install Homebrew first (paste into Terminal, from https://brew.sh):" >&2
+    echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
+    echo "or install Rust from https://rustup.rs, then re-run." >&2
+    exit 1
+  fi
   "$BREW" install rust
 fi
 cargo --version
@@ -42,7 +44,7 @@ else
 fi
 
 say "checking AI backends (optional -- any ONE is enough; pick it in Settings)"
-have() { command -v "$1" >/dev/null || [ -x "$BREW_BIN/$1" ]; }
+have() { command -v "$1" >/dev/null || { [ -n "$BREW_BIN" ] && [ -x "$BREW_BIN/$1" ]; }; }
 if have claude; then
   echo "  claude:   found -- 'Claude' backend available"
 else
