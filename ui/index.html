@@ -142,6 +142,9 @@
   .chip button + button { color: var(--text3); padding: 3px 9px 3px 4px; }
   .chip.on { background: var(--accent); border-color: var(--accent); }
   .chip.on button { color: var(--on-accent); }
+  .preset-empty, .preset-geo { font-size: 12px; color: var(--text3); }
+  .preset-geo { flex: 1; }
+  .chips:not(:empty) + .preset-empty { display: none; }
 
   /* switches (iOS style) */
   .switch { display: flex; align-items: center; gap: 9px; cursor: pointer;
@@ -286,13 +289,24 @@
           <h3>Poll</h3>
           <div id="dropzone">Drag the pollev.com link here, or paste it below</div>
           <div class="field">
+            <label>Presets</label>
+            <div class="chips" id="savedLinks"></div>
+            <div class="preset-empty" id="presetEmpty">None yet: fill in the link, screen name and location below, then Save as preset.</div>
+          </div>
+          <div class="field">
             <label for="pollUrl">Poll link</label>
             <input type="text" id="pollUrl" placeholder="https://pollev.com/...">
-            <div class="chips" id="savedLinks"></div>
           </div>
           <div class="field">
             <label for="username">Screen name</label>
             <input type="text" id="username" placeholder="Name you register as, e.g. abc123">
+          </div>
+          <div class="field">
+            <label>Location</label>
+            <div class="row">
+              <span class="preset-geo" id="presetGeo">not set</span>
+              <button class="btn-quiet btn-small" id="savePresetBtn" style="flex:none;">Save as preset</button>
+            </div>
           </div>
           <div class="footnote">Tip: paste the link your professor shares. The watcher keeps a browser window open for it — if the class requires login, complete it once in that window and it's remembered.</div>
         </div>
@@ -488,7 +502,7 @@
     else fakeMarker = L.marker([lat, lon], { icon: pinIcon('fake') }).addTo(map);
     map.setView([lat, lon], Math.max(map.getZoom(), 13));
     $('coordsLabel').textContent = (label ? label + ' — ' : '') + `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-    if (config) { config.geo_lat = lat; config.geo_lon = lon; }
+    if (config) { config.geo_lat = lat; config.geo_lon = lon; renderSaved(); }
   }
 
   map.on('click', (e) => {
@@ -525,7 +539,8 @@
     syncBackendSeg();
     // First run with this feature: the link already in use starts the list.
     if (!cfg.saved_polls?.length && cfg.poll_url?.includes('pollev.com')) {
-      cfg.saved_polls = [{ url: cfg.poll_url.trim(), geo_lat: cfg.geo_lat || 0, geo_lon: cfg.geo_lon || 0 }];
+      cfg.saved_polls = [{ url: cfg.poll_url.trim(), username: (cfg.username || '').trim(),
+                           geo_lat: cfg.geo_lat || 0, geo_lon: cfg.geo_lon || 0 }];
     }
     renderSaved();
     if (cfg.geo_lat && cfg.geo_lon) {
@@ -585,23 +600,52 @@
   });
   $('pollUrl').addEventListener('paste', () => setTimeout(saveConfig, 0));
 
-  // ---------- saved polls ----------
-  // Each link you Start with is remembered with the fake location it used:
-  // click one to switch to both, x to forget it.
+  // ---------- presets ----------
+  // A preset is a poll link + screen name + fake location. Click one to switch
+  // to all three, x to forget it. It lights up while the form matches it
+  // exactly, so a change you haven't saved is visible.
+  const fmtGeo = (lat, lon) => (lat || lon ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : 'not set');
+  function currentPreset() {
+    return { url: $('pollUrl').value.trim(), username: $('username').value.trim(),
+             geo_lat: config?.geo_lat || 0, geo_lon: config?.geo_lon || 0 };
+  }
+  // Adds the form as a preset, or updates the preset with the same link.
+  function savePreset(overwrite) {
+    const entry = currentPreset();
+    if (!entry.url.includes('pollev.com')) return false;
+    const polls = config.saved_polls || [];
+    const i = polls.findIndex((p) => p.url === entry.url);
+    if (i >= 0 && !overwrite) return false;
+    config.saved_polls = i < 0 ? [...polls, entry] : polls.map((p, j) => (j === i ? entry : p));
+    renderSaved();
+    return true;
+  }
+  $('savePresetBtn').addEventListener('click', () => {
+    if (savePreset(true)) { saveConfig(); logLine('preset saved: ' + $('pollUrl').value.trim(), 'ok'); }
+    else logLine('can\'t save a preset without a pollev.com link', 'err');
+  });
+
   function renderSaved() {
     const box = $('savedLinks');
     box.textContent = '';
+    const cur = currentPreset();
+    $('presetGeo').textContent = $('geoEnabled').checked
+      ? fmtGeo(cur.geo_lat, cur.geo_lon) + ' (change it on the Location tab)'
+      : 'off (fake location is turned off on the Location tab)';
     for (const p of config?.saved_polls || []) {
       const { url } = p;
       const name = url.replace(/^https?:\/\/(www\.)?pollev\.com\//, '') || url;
       const hasGeo = !!(p.geo_lat || p.geo_lon);
+      const same = url === cur.url && (p.username || '') === cur.username
+        && (!hasGeo || (p.geo_lat === cur.geo_lat && p.geo_lon === cur.geo_lon));
       const chip = document.createElement('span');
-      chip.className = 'chip' + (url === $('pollUrl').value.trim() ? ' on' : '');
+      chip.className = 'chip' + (same ? ' on' : '');
       const use = document.createElement('button');
-      use.textContent = name;
-      use.title = url + (hasGeo ? `\nlocation ${p.geo_lat.toFixed(5)}, ${p.geo_lon.toFixed(5)}` : '');
+      use.textContent = name + (p.username ? ' · ' + p.username : '');
+      use.title = `${url}\nscreen name: ${p.username || '(none)'}\nlocation: ${fmtGeo(p.geo_lat, p.geo_lon)}`;
       use.addEventListener('click', () => {
         $('pollUrl').value = url;
+        if (p.username) $('username').value = p.username;
         if (hasGeo) setFakePin(p.geo_lat, p.geo_lon, name);
         saveConfig(); renderSaved();
       });
@@ -616,7 +660,10 @@
       box.append(chip);
     }
   }
-  $('pollUrl').addEventListener('input', renderSaved);
+  for (const id of ['pollUrl', 'username', 'geoEnabled']) {
+    $(id).addEventListener('input', renderSaved);
+    $(id).addEventListener('change', renderSaved);
+  }
 
   // ---------- models ----------
   // Per-backend default when the saved model belongs to a different backend
@@ -698,19 +745,16 @@
   // ---------- start/stop ----------
   $('startStopBtn').addEventListener('click', () => {
     if ($('startStopBtn').textContent === 'Start') {
-      // Remember this poll with the location it runs with (updates it in place).
-      const url = $('pollUrl').value.trim();
-      if (url.includes('pollev.com')) {
-        const polls = config.saved_polls || [];
-        const entry = { url, geo_lat: config.geo_lat || 0, geo_lon: config.geo_lon || 0 };
-        const i = polls.findIndex((p) => p.url === url);
-        config.saved_polls = i < 0 ? [...polls, entry] : polls.map((p, j) => (j === i ? entry : p));
-        renderSaved();
-      }
-      saveConfig();
-      pywebview.api.start_watch().then((r) => {
-        if (!r.ok) (r.problems || []).forEach((p) => logLine('can\'t start: ' + p, 'err'));
-      });
+      savePreset(false); // a new link becomes a preset; saved ones change only via Save
+      // Save now, not debounced: start_watch reads the saved settings, so a
+      // preset clicked just before Start would otherwise run with the old ones.
+      clearTimeout(saveTimer);
+      pywebview.api.save_config(collectForm())
+        .then(() => pywebview.api.start_watch())
+        .then((r) => {
+          if (!r.ok) (r.problems || []).forEach((p) => logLine('can\'t start: ' + p, 'err'));
+        })
+        .catch((e) => logLine('can\'t start: ' + e.message, 'err'));
     } else {
       pywebview.api.stop_watch().then((r) => logLine(r.ok ? 'stopped' : 'stop failed (still running?)', r.ok ? 'ok' : 'err'));
     }

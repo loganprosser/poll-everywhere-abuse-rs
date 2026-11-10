@@ -368,22 +368,33 @@ fn resolve_binary(name: &str) -> PathBuf {
     let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
-    let fallbacks = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from);
     path_dirs
         .iter()
-        .chain(fallbacks.iter())
+        .chain(extra_bin_dirs().iter())
+        .chain([PathBuf::from("/usr/bin")].iter())
         .map(|d| d.join(name))
         .find(|c| is_exec(c))
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
-/// PATH for children with the Homebrew dirs prepended when missing.
+/// Where CLIs live that an app opened from Finder can't see (its PATH is only
+/// the system dirs): Homebrew on Apple Silicon and Intel, and ~/.local/bin,
+/// where Claude's own installer (no Homebrew) puts `claude`.
+fn extra_bin_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")];
+    // An unset HOME must not turn this into a path relative to the cwd.
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        dirs.push(PathBuf::from(home).join(".local/bin"));
+    }
+    dirs
+}
+
+/// PATH for children with extra_bin_dirs prepended when missing.
 fn cli_path() -> OsString {
     let cur = std::env::var_os("PATH").unwrap_or_default();
     let have: Vec<PathBuf> = std::env::split_paths(&cur).collect();
-    let mut dirs: Vec<PathBuf> = ["/opt/homebrew/bin", "/usr/local/bin"]
-        .iter()
-        .map(PathBuf::from)
+    let mut dirs: Vec<PathBuf> = extra_bin_dirs()
+        .into_iter()
         .filter(|d| !have.contains(d))
         .collect();
     dirs.extend(have);

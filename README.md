@@ -10,9 +10,40 @@ Same window, same settings file, same features as the Python app, but it
 answers a live question in about a tenth of a second and the app is 8.6 MB
 instead of 179 MB. [Numbers below](#speed-vs-the-python-version).
 
-## Install (fresh Mac)
+## Install
 
-You need a Mac (macOS 13+). No Apple Developer account, no signing.
+### Apple Silicon Mac (M1 or newer): one line
+
+Nothing needs to be installed first: no Homebrew, no Xcode, no Rust. Open
+Terminal (Cmd-Space, type "Terminal") and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/loganprosser/poll-everywhere-abuse-rs/main/install.sh | bash
+```
+
+It downloads the latest app into Applications, installs Google Chrome if you
+have no Chrome-family browser, installs the Claude command-line tool if it's
+missing, and opens the app. Then sign in to Claude once: run the `claude`
+command it prints, log in, and type `/exit`. AI answering needs a Claude
+subscription; without one the app still watches and notifies you. To update
+later, paste the same line again: your settings and presets are kept.
+
+### Or: the DMG
+
+Download `Poll-Everywhere-Abuse.dmg` from the
+[latest release](https://github.com/loganprosser/poll-everywhere-abuse-rs/releases/latest),
+open it, and drag the app into Applications. The app isn't notarized by Apple
+(that needs a paid developer account), so the **first** open is blocked:
+click Done, then go to System Settings > Privacy & Security, scroll down, and
+click **Open Anyway** next to "Poll Everywhere Abuse". After that it opens
+normally. The DMG doesn't install Chrome or Claude for you; the one-liner
+above does.
+
+### Intel Mac, or build from source
+
+You need macOS 13+. No Apple Developer account, no signing. The build is for
+the Mac it runs on, so an Intel Mac builds its own (an app built on an M-series
+Mac won't open on Intel).
 
 1. **Install Homebrew**: open Terminal and paste the one-line command from
    [brew.sh](https://brew.sh). It also installs git and make. If it prints
@@ -40,14 +71,51 @@ Other commands: `make run` launches from source without building the .app,
 `make test` runs the offline tests (no network, no AI, nothing sent), and
 `make help` lists everything. To update later: `git pull && make app`.
 
+## How it all works
+
+The app is a small window for settings plus a background watcher. When you
+press **Start**:
+
+1. **It opens its own Chrome window** on your poll link. This Chrome uses its
+   own separate profile (not your normal Chrome), so a class login you finish
+   there once is remembered next time.
+2. **It answers PollEv's location request with your fake location**, never
+   your real one (or denies it, if you turn that off).
+3. **It checks the page about 7 times a second** for a live question, by
+   reading the poll data PollEv embeds in the page.
+4. **When a question opens**, it notifies you (Mac notification and sound,
+   ntfy, iMessage: whichever you turned on) and saves the question to disk.
+5. **With AI on**, it asks your AI (Claude, ChatGPT through Codex, or NRP)
+   for an answer, then **waits** a random 14 to 20 seconds from when the
+   question appeared, so it's never the first vote in. It goes sooner if it
+   sees someone else answer first.
+6. **It clicks the answer** in the poll, tells you what it picked, and goes
+   back to watching for the next question.
+
+Press **Stop** (or quit the app) and the Chrome window closes. Details on
+each step are further down: [login](#if-the-poll-requires-login),
+[location](#geolocation), [detection](#how-detection-works),
+[answering](#how-answering-works), [AI backends](#ai-backends).
+
 ## Using it
 
-1. **Tell it your poll**: paste your class's `pollev.com/...` link in the
-   "Poll link" box and type the screen name you want to appear as. Every
-   link you press Start with is saved as a button under the box, together
-   with the fake location it ran with. Click one to switch to that poll and
-   its location, or its × to remove it. Starting a saved poll again saves its
-   current location.
+1. **Set up a preset per class**: a preset is a poll link + screen name +
+   fake location, saved together so switching classes is one click.
+   - Paste the class's `pollev.com/...` link in **Poll link** and type the
+     screen name you want to appear as.
+   - Set the fake location on the **Location** page: click the map, or search
+     a place or type `lat,lon`. The Watch page shows the current location
+     under **Location**.
+   - Click **Save as preset**. It appears as a button under **Presets**.
+
+   Click a preset to switch to its link, screen name and location all at
+   once; its × removes it. A preset lights up while the form matches it
+   exactly, so if one goes dark you've changed something since saving: click
+   **Save as preset** again to update it (presets are matched by link). A new
+   link you press Start with is saved as a preset automatically, but an
+   existing preset only changes when you click Save. Presets live in your own
+   settings file, not in this repo, so pulling or reinstalling keeps them and
+   nobody else sees them.
 2. **Notifications** (Settings): turn on whichever you want. macOS and Sound
    work instantly. ntfy needs a topic (any unique word: install the ntfy app on
    your phone and subscribe to the same word; anyone who knows the word can
@@ -288,19 +356,25 @@ make app          # -> dist/Poll Everywhere Abuse.app (about 8.6 MB)
 
 Built locally and ad-hoc signed on purpose: an app built on the Mac that runs
 it carries no quarantine flag, so Gatekeeper never complains. No Apple
-Developer account, no notarization. To share it, friends clone this repo and
-run `make app` themselves.
+Developer account, no notarization.
+
+To publish a new version for the one-line installer and the DMG, commit and
+push, then run `make release` (needs the `gh` command, logged in). It builds
+the app, packages a zip and a DMG, and creates a GitHub release; the
+installer always downloads the latest one. Releases built on an M-series Mac
+are Apple Silicon only.
 
 What the bundle does *not* include:
 - **A browser.** It uses your installed Chrome-family browser (Google Chrome,
-  Chromium, Brave or Edge). If there's none, the app offers to run
+  Chromium, Brave or Edge). The one-line installer installs Google Chrome if
+  there is none; otherwise the app offers to run
   `brew install --cask google-chrome` for you.
 - **Your AI login.** Each user brings their own `claude` or `codex` login (or
   NRP launcher); nothing is bundled.
 
 ## What's been tested
 
-Offline, with `make test` (95 tests, nothing sent anywhere): every question
+Offline, with `make test` (97 tests, nothing sent anywhere): every question
 type end to end in real Chrome against local fake PollEv pages, including:
 - exact option matching ("2" never clicks "12"), select multiple, short answer
   accept and skip, confirm accept and skip, clickable images

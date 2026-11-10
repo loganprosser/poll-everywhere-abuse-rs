@@ -1,4 +1,4 @@
-.PHONY: help app run setup test
+.PHONY: help app run setup test release
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  make %-8s %s\n", $$1, $$2}'
@@ -19,6 +19,9 @@ app: target/.installed  ## Build dist/Poll Everywhere Abuse.app
 # Run the GUI from source, no packaging.
 run: target/.installed  ## Launch the GUI from source
 	PATH="/opt/homebrew/bin:/usr/local/bin:$$HOME/.cargo/bin:$$PATH" cargo run --release
+
+release: target/.installed  ## Build and publish a GitHub release (zip + DMG; needs gh)
+	./scripts/release.sh
 
 test: target/.installed  ## Offline tests (no network, no AI, nothing sent)
 	PATH="/opt/homebrew/bin:/usr/local/bin:$$HOME/.cargo/bin:$$PATH" cargo test --release

@@ -59,15 +59,16 @@ pub struct AppConfig {
     /// (min, max) seconds after a poll opens before our answer goes in, picked
     /// at random per question; it goes in sooner once someone else has answered.
     pub answer_delay_secs: (f64, f64),
-    /// Polls shown as one-click choices under the Poll link field, each with
-    /// the fake location it was last started with.
+    /// Presets shown as one-click choices on the Watch page.
     pub saved_polls: Vec<SavedPoll>,
 }
 
+/// A preset: poll link + screen name + fake location, applied together.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedPoll {
     pub url: String,
+    pub username: String,
     /// 0, 0 = no location saved with it.
     pub geo_lat: f64,
     pub geo_lon: f64,
